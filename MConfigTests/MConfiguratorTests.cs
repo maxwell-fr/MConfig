@@ -1,6 +1,5 @@
 using MConfig;
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using Xunit;
@@ -8,11 +7,11 @@ using Xunit;
 
 namespace MConfigTests
 {
-    public class MConfiguratorTestData : TheoryData<IDictionary<string, string>, string>
+    public class MConfiguratorTestData : TheoryData<IDictionary<string, string?>, string?>
     {
         public MConfiguratorTestData()
         {
-            IDictionary<string, string> dict1 = new Dictionary<string, string>
+            IDictionary<string, string?> dict1 = new Dictionary<string, string?>
             {
                 ["key2"] = "value2",
                 ["somewhat longer key again"] = "this is a value",
@@ -22,7 +21,7 @@ namespace MConfigTests
             };
 
 
-            IDictionary<string, string> dict2 = new Dictionary<string, string>
+            IDictionary<string, string?> dict2 = new Dictionary<string, string?>
             {
                 ["key1"] = "value1"
             };
@@ -189,7 +188,7 @@ namespace MConfigTests
                     }
                 }
             }
-            catch(MConfigFormatException ex)
+            catch(MConfigFormatException)
             {
                 Assert.True(true);
             }

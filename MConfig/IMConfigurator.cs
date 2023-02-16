@@ -6,11 +6,11 @@ namespace MConfig
     {
         int Count { get; }
 
-        string this[string key] { get; set; }
+        string? this[string key] { get; set; }
 
-        string Get(string key);
+        string? Get(string key);
 
-        void Add(string key, string value);
+        void Add(string key, string? value);
 
         void Remove(string key);
 

@@ -5,30 +5,38 @@ using System.IO;
 
 namespace MConfig
 {
-    public class MConfigurator : IMConfigurator
+    public sealed class MConfigurator : IMConfigurator
     {
-        private const int CONFIG_SIZE = 8_192;
-        private const int CURRENT_VERSION = 0;
-        private const int HEADER_LENGTH = 5;
+        private const int ConfigSize = 8_192;
+        private const int CurrentVersion = 0;
+        private const int HeaderLength = 5;
 
-        private byte[] Buffer;
-        private string Secret;
-        private Stream Stream;
-        private bool StreamIsMine;
-        private bool IsDirty;
+        private byte[] _buffer;
+        private string? _secret;
+        private Stream _stream;
+        private bool _streamIsMine;
+        private bool _isDirty;
 
         
-        private IDictionary<string, string> ConfigData;
+        private IDictionary<string, string?> _configData;
 
         /// <summary>
         /// Instantiate a new configurator using a provided stream.
         /// </summary>
         /// <param name="stream"></param>
         /// <param name="secret"></param>
-        public MConfigurator(Stream stream, string secret = null)
+        public MConfigurator(Stream stream, string? secret = null)
         {
-            StreamIsMine = false;
-            Setup(stream, secret);
+            _streamIsMine = false;
+            _configData = new Dictionary<string, string?>();
+
+            _isDirty = false;
+            
+            _buffer = new byte[ConfigSize];
+            SetSecret(secret);
+            _stream = stream;
+
+            ReadAndDecode();
         }
 
         /// <summary>
@@ -37,28 +45,10 @@ namespace MConfig
         /// </summary>
         /// <param name="filename"></param>
         /// <param name="secret"></param>
-        public MConfigurator(string filename, string secret = null)
+        public MConfigurator(string filename, string? secret = null)
+            : this(new FileStream(filename, FileMode.OpenOrCreate, FileAccess.ReadWrite), secret)
         {
-            StreamIsMine = true;
-            Setup(new FileStream(filename, FileMode.OpenOrCreate, FileAccess.ReadWrite), secret);
-        }
-
-        /// <summary>
-        /// Do common setup work.
-        /// </summary>
-        /// <param name="stream"></param>
-        /// <param name="secret"></param>
-        void Setup(Stream stream, string secret)
-        {
-            ConfigData = new Dictionary<string, string>();
-
-            IsDirty = false;
-            
-            Buffer = new byte[CONFIG_SIZE];
-            SetSecret(secret);
-            Stream = stream;
-
-            ReadAndDecode();
+            _streamIsMine = true;
         }
 
         /// <summary>
@@ -66,7 +56,7 @@ namespace MConfig
         /// </summary>
         /// <param name="key">The key to find.</param>
         /// <returns>The value. Empty (but present) keys return null.</returns>
-        public string Get(string key)
+        public string? Get(string key)
         {
             if(!ContainsKey(key))
             {
@@ -74,7 +64,7 @@ namespace MConfig
             }
             else
             {
-                return ConfigData[key];
+                return _configData[key];
             }
         }
 
@@ -83,19 +73,19 @@ namespace MConfig
         /// </summary>
         /// <param name="key">The key to use. If the key exists it will be updated.</param>
         /// <param name="value">The value to associate with the key.</param>
-        public void Add(string key, string value)
+        public void Add(string key, string? value)
         {
             if(key.Length > byte.MaxValue)
             {
                 throw new MConfigFormatException($"Key too long: {key}.");
             }
-            if(value != null && value.Length > byte.MaxValue)
+            if(value is { Length: > byte.MaxValue })
             {
                 throw new MConfigFormatException($"Value too long: {value}.");
             }
 
-            ConfigData[key] = value;
-            IsDirty = true;
+            _configData[key] = value;
+            _isDirty = true;
         }
 
 
@@ -106,7 +96,7 @@ namespace MConfig
         /// <returns>True if present, false otherwise.</returns>
         public bool ContainsKey(string key)
         {
-            return ConfigData.ContainsKey(key);
+            return _configData.ContainsKey(key);
         }
 
         /// <summary>
@@ -121,26 +111,20 @@ namespace MConfig
             }
             else
             {
-                ConfigData.Remove(key);
+                _configData.Remove(key);
             }
         }
 
         /// <summary>
         /// Number of items present.
         /// </summary>
-        public int Count
-        {
-            get
-            {
-                return ConfigData.Count;
-            }
-        }
+        public int Count => _configData.Count;
 
 
-        public void SetSecret(string secret)
+        public void SetSecret(string? secret)
         {
-            Secret = secret;
-            IsDirty = true;
+            _secret = secret;
+            _isDirty = true;
         }
 
         /// <summary>
@@ -148,17 +132,10 @@ namespace MConfig
         /// </summary>
         /// <param name="key">The key to use.</param>
         /// <returns>The value.</returns>
-        public string this[string key]
+        public string? this[string key]
         {
-            get
-            {
-                return Get(key);
-            }
-
-            set
-            {
-                Add(key, value);
-            }
+            get => Get(key);
+            set => Add(key, value);
         }
 
 
@@ -166,30 +143,30 @@ namespace MConfig
 
         void ReadAndDecode()
         {
-            Stream.Seek(0, SeekOrigin.Begin);
-            int actualLength = Stream.Read(Buffer, 0, CONFIG_SIZE);
+            _stream.Seek(0, SeekOrigin.Begin);
+            int actualLength = _stream.Read(_buffer, 0, ConfigSize);
 
             // at least this many bytes in the header (magic + version), or it's a new file
-            if (actualLength < HEADER_LENGTH)
+            if (actualLength < HeaderLength)
             {
-                IsDirty = true;
+                _isDirty = true;
             }
             else
             {
                 DeobfuscateBuffer();
 
-                if (!(Buffer[0] == 0x4d && Buffer[1] == 0x43 && Buffer[2] == 0x4f &&
-                      Buffer[3] == 0x4e && Buffer[4] == 0x46))
+                if (!(_buffer[0] == 0x4d && _buffer[1] == 0x43 && _buffer[2] == 0x4f &&
+                      _buffer[3] == 0x4e && _buffer[4] == 0x46))
                 {
                     throw new MConfigFormatException("Invalid file format.");
                 }
                 //FUTURE: Buffer[5] holds version
 
-                for (int i = HEADER_LENGTH + 1; i < actualLength; ++i)
+                for (int i = HeaderLength + 1; i < actualLength; ++i)
                 {
                     //get and check key length byte
                     //this being zero indicates end of file (i.e., the zero padding)
-                    byte keyLength = Buffer[i];
+                    byte keyLength = _buffer[i];
                     if (keyLength == 0)
                     {
                         break;
@@ -202,9 +179,9 @@ namespace MConfig
                     }
                     //advance to start of key and decode
                     ++i;
-                    string key = System.Text.Encoding.UTF8.GetString(Buffer, i, keyLength);
+                    string key = System.Text.Encoding.UTF8.GetString(_buffer, i, keyLength);
 
-                    ConfigData[key] = null;
+                    _configData[key] = null;
 
                     //advance to value length
                     i += keyLength;
@@ -215,7 +192,7 @@ namespace MConfig
 
                     //get and check value length byte
                     //zero means null value; key present but unset
-                    byte valLength = Buffer[i];
+                    byte valLength = _buffer[i];
                     if (valLength != 0)
                     {
                         //check that we have that many bytes left
@@ -225,9 +202,9 @@ namespace MConfig
                         }
                         //advance to start of value and copy into value buffer
                         ++i;
-                        string value = System.Text.Encoding.UTF8.GetString(Buffer, i, valLength);
+                        string value = System.Text.Encoding.UTF8.GetString(_buffer, i, valLength);
 
-                        ConfigData[key] = value;
+                        _configData[key] = value;
 
                         i += valLength - 1; // -1 to account for next-iteration goodness
                     }
@@ -240,20 +217,20 @@ namespace MConfig
         /// </summary>
         void EncodeToBuffer()
         {
-            Array.Clear(Buffer, 0, CONFIG_SIZE);
+            Array.Clear(_buffer, 0, ConfigSize);
 
-            Buffer[0] = 0x4d;
-            Buffer[1] = 0x43;
-            Buffer[2] = 0x4f;
-            Buffer[3] = 0x4e;
-            Buffer[4] = 0x46;
-            Buffer[5] = CURRENT_VERSION;
+            _buffer[0] = 0x4d;
+            _buffer[1] = 0x43;
+            _buffer[2] = 0x4f;
+            _buffer[3] = 0x4e;
+            _buffer[4] = 0x46;
+            _buffer[5] = CurrentVersion;
 
-            int bufIndex = HEADER_LENGTH + 1;
+            int bufIndex = HeaderLength + 1;
 
-            foreach (string key in ConfigData.Keys)
+            foreach (string key in _configData.Keys)
             {
-                string value = ConfigData[key];
+                string? value = _configData[key];
 
                 byte[] keyBytes = System.Text.Encoding.UTF8.GetBytes(key);
                 if (keyBytes.Length > byte.MaxValue)
@@ -276,35 +253,35 @@ namespace MConfig
 
 
                 //check to make sure we won't run over
-                if (bufIndex + 1 + keyLength + 1 + valLength + 1> CONFIG_SIZE)
+                if (bufIndex + 1 + keyLength + 1 + valLength + 1> ConfigSize)
                 {
                     throw new MConfigFormatException($"Maximum size will be exceeded at key [{key}].");
                 }
 
-                Buffer[bufIndex] = keyLength;
+                _buffer[bufIndex] = keyLength;
                 ++bufIndex;
                 for (int i = 0; i < keyLength; ++i)
                 {
-                    Buffer[bufIndex] = keyBytes[i];
+                    _buffer[bufIndex] = keyBytes[i];
                     ++bufIndex;
                 }
 
-                Buffer[bufIndex] = valLength;
+                _buffer[bufIndex] = valLength;
                 ++bufIndex;
                 for (int i = 0; i < valLength; ++i)
                 {
-                    Buffer[bufIndex] = valBytes[i];
+                    _buffer[bufIndex] = valBytes[i];
                     ++bufIndex;
                 }
             }
             //ending byte
-            Buffer[bufIndex] = 0;
+            _buffer[bufIndex] = 0;
 
             //fill rest with random
             Random rand = new Random();
-            for(bufIndex += 1; bufIndex < CONFIG_SIZE; ++bufIndex)
+            for(bufIndex += 1; bufIndex < ConfigSize; ++bufIndex)
             {
-                Buffer[bufIndex] = (byte)rand.Next(0, 255);
+                _buffer[bufIndex] = (byte)rand.Next(0, 255);
             }
 
             ObfuscateBuffer();
@@ -317,12 +294,12 @@ namespace MConfig
         {
             EncodeToBuffer();
 
-            Stream.Seek(0, SeekOrigin.Begin);
-            Stream.SetLength(CONFIG_SIZE);
+            _stream.Seek(0, SeekOrigin.Begin);
+            _stream.SetLength(ConfigSize);
 
-            Stream.Write(Buffer, 0, CONFIG_SIZE);
+            _stream.Write(_buffer, 0, ConfigSize);
 
-            IsDirty = false;
+            _isDirty = false;
         }
 
         /*
@@ -361,16 +338,16 @@ namespace MConfig
         /// </summary>
         private void XorBuffer()
         {
-            if (Secret == null || Secret.Length == 0)
+            if (string.IsNullOrEmpty(_secret))
             {
                 return;
             }
-            byte[] secret = System.Text.Encoding.UTF8.GetBytes(Secret);
+            byte[] secret = System.Text.Encoding.UTF8.GetBytes(_secret);
             int s = 0;
 
-            for (int i = HEADER_LENGTH + 1; i < CONFIG_SIZE; ++i)
+            for (int i = HeaderLength + 1; i < ConfigSize; ++i)
             {
-                Buffer[i] = (byte)(Buffer[i] ^ secret[s]);
+                _buffer[i] = (byte)(_buffer[i] ^ secret[s]);
                 ++s;
                 if (s >= secret.Length)
                 {
@@ -380,26 +357,24 @@ namespace MConfig
         }
 
         #region IDisposable Support
-        private bool disposedValue = false; // To detect redundant calls
+        private bool _disposedValue; // To detect redundant calls
 
-        protected virtual void Dispose(bool disposing)
+        private void Dispose(bool disposing)
         {
-            if (!disposedValue)
+            if (_disposedValue) return;
+            if (disposing)
             {
-                if (disposing)
+                if (_isDirty)
                 {
-                    if (IsDirty)
-                    {
-                        Save();
-                    }
-                    if (StreamIsMine)
-                    {
-                        Stream.Close();
-                    }
+                    Save();
                 }
-
-                disposedValue = true;
+                if (_streamIsMine)
+                {
+                    _stream.Close();
+                }
             }
+
+            _disposedValue = true;
         }
 
         // This code added to correctly implement the disposable pattern.
