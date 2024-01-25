@@ -1,11 +1,15 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Xml.XPath;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Primitives;
 
 
 namespace MConfig
 {
-    public sealed class MConfigurator : IMConfigurator
+    public sealed class MConfigurator : IMConfigurator, IConfigurationProvider
     {
         private const int ConfigSize = 8_192;
         private const int CurrentVersion = 0;
@@ -160,7 +164,12 @@ namespace MConfig
                 {
                     throw new MConfigFormatException("Invalid file format.");
                 }
-                //FUTURE: Buffer[5] holds version
+
+                //check for the only supported version and fail otherwise
+                if (_buffer[5] != 0)
+                {
+                    throw new MConfigFormatException("Unknown version.");
+                }
 
                 for (int i = HeaderLength + 1; i < actualLength; ++i)
                 {
@@ -304,16 +313,16 @@ namespace MConfig
 
         /*
          *  File Format Detail:
-         *  
-         *  4d 43 4f 4e 46 vv 
+         *
+         *  4d 43 4f 4e 46 vv
          *  ll xx xx xx xx xx mm yy yy yy yy yy
-         *  
+         *
          *  first five are magic bytes
          *  v = version byte
          *  x = key, y = value
-         *  l = length of key in bytes, m = length of value in bytes 
+         *  l = length of key in bytes, m = length of value in bytes
          *  pattern repeats
-         *  
+         *
          */
 
         /// <summary>
@@ -387,5 +396,38 @@ namespace MConfig
         }
         #endregion
 
+        public bool TryGet(string key, out string? value)
+        {
+            if(!ContainsKey(key))
+            {
+                value = null;
+                return false;
+            }
+            else
+            {
+                value = _configData[key];
+                return true;
+            }
+        }
+
+        public void Set(string key, string? value)
+        {
+            Add(key, value);
+        }
+
+        public IChangeToken GetReloadToken()
+        {
+            return null;
+        }
+
+        public void Load()
+        {
+            ReadAndDecode();
+        }
+
+        public IEnumerable<string> GetChildKeys(IEnumerable<string> earlierKeys, string? parentPath)
+        {
+            throw new NotImplementedException();
+        }
     }
 }

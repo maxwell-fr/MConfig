@@ -1,8 +1,9 @@
 ﻿using System;
+using Microsoft.Extensions.Configuration;
 
 namespace MConfig
 {
-    public interface IMConfigurator : IDisposable
+    public interface IMConfigurator : IDisposable, IConfigurationProvider
     {
         int Count { get; }
 
